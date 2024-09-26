@@ -1,8 +1,9 @@
 package uwu.narumi.deobfuscator;
 
+import uwu.narumi.deobfuscator.core.other.composed.ComposedHP888Transformer;
 import uwu.narumi.deobfuscator.core.other.composed.ComposedZelixTransformer;
 import uwu.narumi.deobfuscator.core.other.composed.general.ComposedGeneralFlowTransformer;
-import uwu.narumi.deobfuscator.core.other.impl.clean.PeepholeCleanTransformer;
+import uwu.narumi.deobfuscator.core.other.composed.general.ComposedPeepholeCleanTransformer;
 import uwu.narumi.deobfuscator.core.other.impl.clean.peephole.JsrInlinerTransformer;
 import uwu.narumi.deobfuscator.core.other.impl.pool.InlineLocalVariablesTransformer;
 import uwu.narumi.deobfuscator.core.other.impl.pool.InlineStaticFieldTransformer;
@@ -19,7 +20,7 @@ public class TestDeobfuscation extends TestDeobfuscationBase {
   protected void registerAll() {
     register("Inlining local variables", InputType.JAVA_CODE, List.of(
         InlineLocalVariablesTransformer::new,
-        PeepholeCleanTransformer::new
+        ComposedPeepholeCleanTransformer::new
     ), Source.of("TestInlineLocalVariables"));
     register("Simple flow obfuscation", InputType.JAVA_CODE, List.of(ComposedGeneralFlowTransformer::new), Source.of("TestSimpleFlowObfuscation"));
     register("Universal Number Transformer", InputType.JAVA_CODE, List.of(UniversalNumberTransformer::new), Source.of("TestUniversalNumberTransformer"));
@@ -103,6 +104,12 @@ public class TestDeobfuscation extends TestDeobfuscationBase {
     register("Zelix (21) Snake Game", InputType.CUSTOM_JAR,
         List.of(ComposedZelixTransformer::new),
         Source.of("SnakeGame-obf-zkm")
+    );
+
+    // Example HP888 classes. Without packer.
+    register("HP888", InputType.CUSTOM_CLASS, List.of(ComposedHP888Transformer::new),
+        Source.of("hp888/ExampleClass"),
+        Source.of("hp888/Strings") // Obfuscated strings
     );
   }
 }

@@ -8,7 +8,7 @@ import org.objectweb.asm.tree.AbstractInsnNode;
 import org.objectweb.asm.tree.MethodInsnNode;
 import org.objectweb.asm.tree.MethodNode;
 import uwu.narumi.deobfuscator.api.asm.ClassWrapper;
-import uwu.narumi.deobfuscator.api.asm.InstructionContext;
+import uwu.narumi.deobfuscator.api.asm.InsnContext;
 import uwu.narumi.deobfuscator.api.asm.MethodContext;
 import uwu.narumi.deobfuscator.api.asm.matcher.Match;
 import uwu.narumi.deobfuscator.api.asm.matcher.MatchContext;
@@ -64,7 +64,7 @@ public class ZelixLongEncryptionMPCTransformer extends Transformer {
       .and(StackMatch.of(0, MethodMatch.invokeInterface().desc("(J)J")
           .and(StackMatch.of(0, NumberMatch.numLong().capture("decrypt-key"))) // Decrypt key
           // Create decrypter
-          .and(StackMatch.of(1, MethodMatch.invokeStatic().and(Match.predicate(context ->
+          .and(StackMatch.of(1, MethodMatch.invokeStatic().and(Match.of(context ->
                   ((MethodInsnNode) context.insn()).desc.startsWith("(JJLjava/lang/Object;)"))).capture("create-decrypter-method")
 
               .and(StackMatch.of(0, MethodMatch.invokeVirtual().and(StackMatch.of(0, MethodMatch.invokeStatic())))) // Class lookup
@@ -85,7 +85,7 @@ public class ZelixLongEncryptionMPCTransformer extends Transformer {
    */
   private final Map<String, String> classInitOrder;
 
-  private SandBox sandBox;
+  private SandBox sandBox = null;
   private final List<String> processedClasses = new ArrayList<>(); // class internal names
 
   public ZelixLongEncryptionMPCTransformer() {
@@ -105,8 +105,6 @@ public class ZelixLongEncryptionMPCTransformer extends Transformer {
 
   @Override
   protected void transform(ClassWrapper scope, Context context) throws Exception {
-    sandBox = new SandBox(context);
-
     // Firstly, process the manual list of class initialization order
     for (var entry : classInitOrder.entrySet()) {
       ClassWrapper first = context.getClasses().get(entry.getKey());
@@ -122,7 +120,9 @@ public class ZelixLongEncryptionMPCTransformer extends Transformer {
     });
 
     // Remove decrypter classes
-    sandBox.getUsedCustomClasses().forEach(clazz -> context.getClasses().remove(clazz.getInternalName()));
+    if (sandBox != null) {
+      sandBox.getUsedCustomClasses().forEach(clazz -> context.getClasses().remove(clazz.getInternalName()));
+    }
   }
 
   /**
@@ -147,68 +147,68 @@ public class ZelixLongEncryptionMPCTransformer extends Transformer {
 
     MethodContext methodContext = MethodContext.framed(classWrapper, clinit);
 
-    for (AbstractInsnNode insn : clinit.instructions) {
-      InstructionContext insnContext = methodContext.newInsnContext(insn);
-      if (insnContext.frame() == null) return;
-
-      MatchContext result = DECRYPT_LONG_MATCHER.matchResult(insnContext);
-      if (result != null) {
-        // Get instructions from storage
-        MethodInsnNode createDecrypterInsn = (MethodInsnNode) result.captures().get("create-decrypter-method").insn();
-        MatchContext decryptContext = result.captures().get("decrypt-method");
-        MethodInsnNode decryptInsn = (MethodInsnNode) decryptContext.insn();
-
-        // Some keys
-        long key1 = result.captures().get("key-1").insn().asLong();
-        long key2 = result.captures().get("key-2").insn().asLong();
-        long decryptKey = result.captures().get("decrypt-key").insn().asLong();
-
-        ClassWrapper longDecrypterCreatorClass = context.getClasses().get(createDecrypterInsn.owner);
-
-        try {
-          // Create decrypter
-          InstanceClass clazz = sandBox.getHelper().loadClass(longDecrypterCreatorClass.canonicalName());
-          ObjectValue longDecrypterInstance = sandBox.getInvocationUtil().invokeReference(
-              clazz.getMethod(createDecrypterInsn.name, createDecrypterInsn.desc),
-              Argument.int64(key1), // Key 1
-              Argument.int64(key2), // Key 2
-              Argument.reference(sandBox.getMemoryManager().nullValue()) // Lookup class
-          );
-          InstanceClass longDecrypterClass = (InstanceClass) sandBox.getMemoryManager().readClass(longDecrypterInstance);
-
-          //String instanceStringified = sandBox.vm().getOperations().toString(longDecrypterInstance);
-          //System.out.println(classWrapper.name() + " -> " + instanceStringified);
-
-          if (isFallbackDecrypter(longDecrypterClass)) {
-            LOGGER.error("Detected that '{}' class is decrypted out of order. Decrypted number will have wrong value.", classWrapper.name());
-            LOGGER.error("The author used 'classInitializationOrderStatement' (https://www.zelix.com/klassmaster/docs/classInitializationOrderStatement.html) " +
-                "during jar obfuscation to specify class initialization order manually. " +
-                "You need to pass to ZelixLongEncryptionMPCTransformer a class initialization order. The easiest way wille be doing a static analysis " +
-                "and find where the mentioned class is used."
-            );
-          }
-
-          // Decrypt long value
-          long value = sandBox.getInvocationUtil().invokeLong(
-              longDecrypterClass.getMethod(decryptInsn.name, decryptInsn.desc),
-              Argument.reference(longDecrypterInstance),
-              Argument.int64(decryptKey)
-          );
-
-          // Remove all instructions that creates decrypter
-          decryptContext.removeAll();
-
-          // Set field to decrypted long value!
-          insnContext.methodNode().instructions.insertBefore(insnContext.insn(), AsmHelper.numberInsn(value));
-          markChange();
-        } catch (VMException ex) {
-          sandBox.logVMException(ex);
-          throw new RuntimeException(ex);
-        } catch (ClassNotFoundException e) {
-          throw new RuntimeException(e);
-        }
+    // Find all encrypted longs
+    DECRYPT_LONG_MATCHER.findAllMatches(methodContext).forEach(matchContext -> {
+      if (sandBox == null) {
+        // Lazily load sandbox
+        this.sandBox = new SandBox(context);
       }
-    }
+
+      // Get instructions from storage
+      MethodInsnNode createDecrypterInsn = (MethodInsnNode) matchContext.captures().get("create-decrypter-method").insn();
+      MatchContext decryptContext = matchContext.captures().get("decrypt-method");
+      MethodInsnNode decryptInsn = (MethodInsnNode) decryptContext.insn();
+
+      // Some keys
+      long key1 = matchContext.captures().get("key-1").insn().asLong();
+      long key2 = matchContext.captures().get("key-2").insn().asLong();
+      long decryptKey = matchContext.captures().get("decrypt-key").insn().asLong();
+
+      ClassWrapper longDecrypterCreatorClass = context.getClasses().get(createDecrypterInsn.owner);
+
+      try {
+        // Create decrypter
+        InstanceClass clazz = sandBox.getHelper().loadClass(longDecrypterCreatorClass.canonicalName());
+        ObjectValue longDecrypterInstance = sandBox.getInvocationUtil().invokeReference(
+            clazz.getMethod(createDecrypterInsn.name, createDecrypterInsn.desc),
+            Argument.int64(key1), // Key 1
+            Argument.int64(key2), // Key 2
+            Argument.reference(sandBox.getMemoryManager().nullValue()) // Lookup class
+        );
+        InstanceClass longDecrypterClass = (InstanceClass) sandBox.getMemoryManager().readClass(longDecrypterInstance);
+
+        //String instanceStringified = sandBox.vm().getOperations().toString(longDecrypterInstance);
+        //System.out.println(classWrapper.name() + " -> " + instanceStringified);
+
+        if (isFallbackDecrypter(longDecrypterClass)) {
+          LOGGER.error("Detected that '{}' class is decrypted out of order. Decrypted number will have wrong value.", classWrapper.name());
+          LOGGER.error("The author used 'classInitializationOrderStatement' (https://www.zelix.com/klassmaster/docs/classInitializationOrderStatement.html) " +
+              "during jar obfuscation to specify class initialization order manually. " +
+              "You need to pass to ZelixLongEncryptionMPCTransformer a class initialization order. The easiest way wille be doing a static analysis " +
+              "and find where the mentioned class is used."
+          );
+        }
+
+        // Decrypt long value
+        long value = sandBox.getInvocationUtil().invokeLong(
+            longDecrypterClass.getMethod(decryptInsn.name, decryptInsn.desc),
+            Argument.reference(longDecrypterInstance),
+            Argument.int64(decryptKey)
+        );
+
+        // Remove all instructions that create decrypter
+        decryptContext.removeAll();
+
+        // Set field to decrypted long value!
+        matchContext.insnContext().methodNode().instructions.insertBefore(matchContext.insn(), AsmHelper.numberInsn(value));
+        markChange();
+      } catch (VMException ex) {
+        sandBox.logVMException(ex);
+        throw new RuntimeException(ex);
+      } catch (ClassNotFoundException e) {
+        throw new RuntimeException(e);
+      }
+    });
 
     processedClasses.add(classWrapper.name());
   }

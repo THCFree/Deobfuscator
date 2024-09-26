@@ -4,7 +4,7 @@ import org.objectweb.asm.tree.AbstractInsnNode;
 import org.objectweb.asm.tree.FrameNode;
 import org.objectweb.asm.tree.LabelNode;
 import org.objectweb.asm.tree.LineNumberNode;
-import uwu.narumi.deobfuscator.api.asm.InstructionContext;
+import uwu.narumi.deobfuscator.api.asm.InsnContext;
 import uwu.narumi.deobfuscator.api.asm.matcher.Match;
 import uwu.narumi.deobfuscator.api.asm.matcher.MatchContext;
 
@@ -17,9 +17,9 @@ import java.util.List;
 // TODO: backwards match?
 public class SequenceMatch extends Match {
 
-  private static final Match FRAME_MATCH = Match.predicate(context -> context.insn() instanceof FrameNode);
-  private static final Match LABEL_MATCH = Match.predicate(context -> context.insn() instanceof LabelNode);
-  private static final Match LINE_MATCH = Match.predicate(context -> context.insn() instanceof LineNumberNode);
+  private static final Match FRAME_MATCH = Match.of(context -> context.insn() instanceof FrameNode);
+  private static final Match LABEL_MATCH = Match.of(context -> context.insn() instanceof LabelNode);
+  private static final Match LINE_MATCH = Match.of(context -> context.insn() instanceof LineNumberNode);
 
   private final Match[] matches;
   private final List<Match> skipMatches = new ArrayList<>(List.of(FRAME_MATCH, LABEL_MATCH, LINE_MATCH));
@@ -73,7 +73,7 @@ public class SequenceMatch extends Match {
         return false;
       }
 
-      InstructionContext currentInsnContext = context.insnContext().of(currentInsn);
+      InsnContext currentInsnContext = context.insnContext().of(currentInsn);
       if (this.skipMatches.stream().anyMatch(match -> match.matches(currentInsnContext))) {
         // Skip instruction
         currentInsn = currentInsn.getNext();
